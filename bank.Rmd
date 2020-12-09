@@ -1,0 +1,237 @@
+---
+title: "Project 2"
+author: "Jake Gandolfo, Leo Li, Rahil Patel, Raven Chen, Austin Morton"
+date: "11/23/2020"
+output: html_document
+---
+
+```{r}
+library(easypackages)
+my_packages <- c("dplyr", "ggplot2", "ggthemes", "tidyverse", "gmodels", "C50", "neuralnet", "kernlab", "stringr", "lattice", "caret", "class", "e1071")
+libraries(my_packages)
+
+## import data
+bank = read.csv("bank.csv")
+
+## clean the data
+bank$month = as.factor((bank$month))
+bank$default = as.factor(bank$default)
+bank$job = as.factor(bank$job)
+bank$marital = as.factor(bank$marital)
+bank$education = as.factor(bank$education)
+bank$housing = as.factor(bank$housing)
+bank$loan = as.factor(bank$loan)
+bank$contact = as.factor(bank$contact)
+bank$poutcome = as.factor(bank$poutcome)
+bank$y = as.numeric(bank$y)-1
+#str(bank)
+
+```
+## Data Visualizations
+```{}
+The data we are examing relates to a Portgese Bank. They are conducting a direct marketing campaign to determine if clients would subscribe to a term deposit. This was done through phone calls directly to the clients.
+
+A term deposit locks away money for an agreed upon length (term), which means you cannot access the money until the term is up. In return, you get a guaranteed rate of interest, so you are locked into a future sum of money.
+
+Before predicting whether a client would lock their money up for an extended period, it is important to gain an understanding of the type of data that we are working with. We decided that it would be helpful to create some graphic visualizations of the data and see if there are any trends that are worth noting. 
+```
+
+```{}
+To get an understanding of the demographics we are working with, we decided to breakdown occupations by age. This data seems pretty in line with a dataset that represents a large segment of the overall population. Intuitively, people with higher paying jobs would have more free cash flow to give to a bank. However, term deposits are not necessarily good invesmtnets, given their low guaranteed rate of return. Therefore, it is unclear yet whether the type of job would be a significant factor in determining the likelihood of subscribing to the term deposit.
+```
+
+```{r}
+ggplot(data = bank, aes(x = job, y = age)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Job") + 
+  ylab("Age")+ 
+  ggtitle("Employment Status by Age") + 
+  theme_stata()
+```
+
+```{}
+The boxplots below looks at outstanding loan balance by marital status and education. These results are pretty in line with typical trends that we tend to see in America. Married couples have higher outstanding loan balance since they have a larger household. People with higher degress tend to have higher balance since higher education is generally more expensive.
+```
+
+
+```{r}
+ggplot(data = bank, aes(x = marital, y = balance)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Marital Status") + 
+  ylab("Outstanding Balance")+ 
+  ggtitle("Outstanding Balance By Marital Status") + 
+  theme_stata()
+```
+
+```{r}
+ggplot(data = bank, aes(x = education, y = balance)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Education") + 
+  ylab("Outstanding Balance")+ 
+  ggtitle("Outstanding Balance By Education") + 
+  theme_stata()
+```
+```{}
+We examined the duration of phone calls to clients based on their education (see the boxplot below). These findings were interesting - there does not appear to be a big difference across the educational levels. This could mean that education may not be a significant predictor of whether somebody will subscribe to the term deposit program. We will find out more when we conduct of statistical analysis. 
+```
+```{r}
+ggplot(data = bank, aes(x = education, y = duration)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Education") + 
+  ylab("Phone Call Duration")+ 
+  ggtitle("Call Duration By Education") + 
+  theme_stata()
+```
+```{}
+It makes intuitive sense that people who stay on the phone for a longer time may be more interested in the product, and those who hang up quickly are definitely not interested. To verify this assumption, we visualized the relationship between call duration (in seconds) and whether the person subscribed in the end. As can be seen below, there is a clear trend here, as the proportion of 1's increases as call duration increases.
+However, since this attribute is not known before a call is performed, this cannot be included in predictive models.
+```
+
+```{r}
+ggplot(bank) + geom_histogram(aes(duration, fill=y), binwidth=30) + 
+  ggtitle("Subscription Status By Call Duration")
+bank = bank %>% select(-duration)
+```
+
+## Split into test and train data
+```{}
+Our dataset has heavy class imbalance, where 88% of the labels are no's and 12% are yes's. This would make it really hard to fit the models, especially for a mechanism like KNN where if k is sufficiently large, majority of the neighboring data points would have "no" as label, causing the model to give all "no" predictions.
+Therefore, to solve this issue, we used down-sampling (downSample() function in caret) to randomly sample a portion of "no" and have a more balanced dataset.
+```
+
+```{r}
+set.seed(50)
+normalize = function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+bank = downSample(bank, as.factor(bank$y)) %>% rename(y = Class) # down-sampling
+bank_dummy <- as.data.frame(model.matrix(~.-1,bank)) # turn into dummy variables
+bank_normalize <- as.data.frame(lapply(bank_dummy, normalize)) %>% rename(y = y1)
+
+bank_normalize = bank_normalize[complete.cases(bank_normalize), ] # remove NA's if any
+
+test_set <- sample(1:nrow(bank_normalize), round(nrow(bank)/5)) # a 80/20 train test split 
+
+bank_train_x <- bank_normalize[-test_set, -match("y",names(bank_normalize))]
+bank_test_x <- bank_normalize[test_set, -match("y",names(bank_normalize))]
+
+bank_train_y <- bank_normalize[-test_set, "y"]
+bank_test_y <- bank_normalize[test_set, "y"]
+
+bank_train = bank_train_x %>% mutate(y = bank_train_y)
+```
+
+
+## Train models
+
+#### Logistic Regression
+```{r}
+LR = glm(y ~ ., data = bank_train)
+summary(LR)
+#anova(LR, test = "Chisq")
+layout(matrix(c(1,2,3,4),2,2))
+plot(LR)
+```
+```{}
+In our logistic model above, we can see that there are several significant predictors of subscription. The variables that are significant make sense intuitively. However, we did find it surprising that some of the variables were not significant. Specifically, we were surprised that default is not a significant predictor. When somebody is in default, one would think that they do not have the income to contribute to a term deposit program. The same goes for outstanding balance. We will examine in further models if this is consistent with what the logistic model found. 
+The plots also suggest that this logistic regression is a good fit. For example, the Normal Q-Q plot is in a linear upward trend and the residuals vs leverage plot is randomly scattered along the center line and within the Cook's distance.
+```
+
+#### KNN
+```{r}
+knn_size = round(sqrt(nrow(bank_train_x))) # 29, which is an odd number already
+KNN_pred = knn(train = bank_train_x, test = bank_test_x, cl = bank_train_y, k = knn_size)
+```
+
+#### ANN
+```{r}
+ANN <- neuralnet(formula = y ~ ., data = bank_train, hidden = 1) # with 1 hidden neuron
+```
+
+#### SVM
+```{r}
+SVM <- svm(y ~ ., data = bank_train, kernel = "linear", scale = FALSE)
+SVM
+```
+
+#### Decision Tree
+```{r}
+error_cost <- matrix(c(0, 20,
+                       60, 0), 2, 2) # Adding a cost matrix to control for mainly false negatives
+DT <- C5.0(bank_train_x, as.factor(bank_train_y), costs = error_cost)
+plot(DT) # visualize the decision tree
+```
+
+## Predict on train data and evaluate performance
+```{r}
+# Logistic Regression
+LR_pred_prob = predict(LR, bank_test_x)
+LR_pred = ifelse(LR_pred_prob > 0.5, 1, 0)
+CrossTable(bank_test_y, LR_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE)
+LR_eval = confusionMatrix(as.factor(LR_pred), as.factor(bank_test_y), positive = "1")
+LR_eval
+
+# KNN 
+CrossTable(bank_test_y, KNN_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE)
+KNN_eval = confusionMatrix(as.factor(KNN_pred), as.factor(bank_test_y), positive = "1")
+KNN_eval
+
+# ANN
+ANN_pred_prob <- predict(ANN, bank_test_x)
+ANN_pred = ifelse(ANN_pred_prob > 0.5, 1, 0)
+CrossTable(bank_test_y, ANN_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE)
+ANN_eval = confusionMatrix(as.factor(ANN_pred), as.factor(bank_test_y), positive = "1")
+ANN_eval
+
+# SVM
+SVM_pred_prob = predict(SVM, bank_test_x)
+SVM_pred = ifelse(SVM_pred_prob > 0.5, 1, 0)
+CrossTable(bank_test_y, SVM_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE)
+SVM_eval = confusionMatrix(as.factor(SVM_pred), as.factor(bank_test_y), positive = "1")
+SVM_eval
+
+# Decision Tree
+DT_pred <- predict(DT, bank_test_x)
+CrossTable(bank_test_y, DT_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE)
+DT_eval = confusionMatrix(as.factor(DT_pred), as.factor(bank_test_y), positive = "1")
+DT_eval
+```
+
+## Stacked model
+```{r}
+stacked_train = data.frame(LR = predict(LR, bank_train_x), 
+                KNN = knn(train = bank_train_x, test = bank_train_x, cl = bank_train_y, k = knn_size), 
+                            ANN = predict(ANN, bank_train_x), 
+                            SVM = predict(SVM, bank_train_x),
+                            DT = predict(DT, bank_train_x), 
+                            y = as.factor(bank_train_y))
+
+stacked_test = data.frame(LR = LR_pred_prob, 
+                          KNN = KNN_pred, 
+                          ANN = ANN_pred_prob, 
+                          SVM = SVM_pred_prob,
+                          DT = DT_pred)
+
+stacked <- C5.0(stacked_train[-6], as.factor(stacked_train$y), costs = error_cost)
+stacked_pred <- predict(stacked, stacked_test)
+CrossTable(bank_test_y, stacked_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE)
+stacked_eval = confusionMatrix(as.factor(stacked_pred), as.factor(bank_test_y), positive = "1")
+stacked_eval
+```
+
+## Summary table
+```{r}
+summary_df = data.frame(model = c("LR", "KNN", "ANN", "SVM", "DT", "Stacked"), 
+                        Kappa = c(LR_eval$overall[2], KNN_eval$overall[2], ANN_eval$overall[2], SVM_eval$overall[2], DT_eval$overall[2], stacked_eval$overall[2]),
+                        Accuracy = c(LR_eval$overall[1], KNN_eval$overall[1], ANN_eval$overall[1], SVM_eval$overall[1], DT_eval$overall[1], stacked_eval$overall[1]))
+summary_df
+```
+```{r}
+summary(summary_df)
+```
+## Conclusion
+```{}
+As can be seen from the metrics above, our models average a kappa statistic of 0.312 and an accuracy of 0.657. Since a kappa statistic between 0.2 to 0.4 is generally intepreted as a fair agreement, the models in predicting whether clients will subscribe to the term deposit do not work so great, mostly due to the lack of highly predictive input variables, and it would be fairly difficult to make substantial improvement through solely adjusting the algorithms.
+
+Under this specific business case, inaccuracies in prediction have the following implications:
+
+False positive: we think client will subscribe -> reach out and sell the product -> client declines
+False Negative: we think client will not subscribe -> skip this client -> potential sales lost
+
+Since they come at different costs, it is hard to say which one is worse. Some of our models does a better job avoiding false negatives, and some have lower false positive rates, so depending on the business strategy, and perhaps the cost of labor and advertisement, we could apply different machine learning algorithms accordingly.
+
+Furthermore, we think that in the real business setting, we don't necessarily need to give each client a binary label, that is, we can leave it at the probability of subscribing to the term deposit, and target each customer differently based on that. For example, we may be more interested in reaching out (making a phone call, sending out promotional emails, etc.) to clients with around a 50% chance compared to those with 20% chance, since it is much easier to improve those "50-50" clients to a high probability. Also, we might not even need to make a heavy effort calling those "95%" clients, and we could use other less costly and more efficient approaches rather than making a phone call, since those people almost certainly will subscribe as long as they are aware of this product. Therefore, there are still lots of flexibility and room for improvements if we were to apply this project to the real business case. 
+```
