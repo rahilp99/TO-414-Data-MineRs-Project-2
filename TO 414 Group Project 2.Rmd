@@ -1,0 +1,400 @@
+---
+title: "Project 2"
+author: "Rahil Patel, Jake Gandolfo, Leo Li, Raven Chen"
+date: "12/16/2020"
+output: html_document
+---
+
+# Load Necessary Packages
+
+```{r}
+library(easypackages)
+my_packages <- c("dplyr", "ggplot2", "ggthemes", "tidyverse", "gmodels", "C50", "neuralnet", "kernlab", "stringr", "lattice", "caret", "class", "e1071")
+libraries(my_packages)
+```
+
+# About the Data and Goals of the Project
+
+```{}
+The data we are examining relates to a Portuguese Bank. They are conducting a direct marketing campaign to determine if clients would subscribe to a term deposit. This was done through phone calls directly to the clients. A term deposit locks away money for an agreed upon length (term), which means you cannot access the money until the term is up. In return, you get a guaranteed rate of interest, so you are locked into a future sum of money.
+
+In this project, we are going to analyze historical data from the bank with the goal of predicting whether a future prospective client will subscribe to the term deposit or not before even making the call. A successful completion of this project will allow the bank to save time and money by only engaging with prospective clients who are likely to subscribe to the term. In the telemarketing industry, success rates are very low, which means that there is a lot of value in being able to predict if a call is successful or not ahead of time.
+```
+
+# Import and Clean Data
+
+```{}
+The original data set that we have used for this project had a large skew in the data (89% of data points were unsuccessfull calls while only 11% were successful). This imbalance would make it really difficult to fit predictive models, especially for a mechanism like KNN where if k is sufficiently large, majority of the neighboring data points would have "no" as label, causing the model to give all "no" predictions. To account for this skew, we have essentially created a new data set to use for analysis. This data set is comprised of every successful call (521 total) and a random sample of 1042 unsuccessful calls. Our new data set is 1563 data points, with the skew now only being 33% successful calls and 67% unsuccessful calls.
+
+In the cleaning steps outlined below, we first removed the variable "day" because this is not a meaningful variable in terms of predictivness mainly because the models will not be able to detect the difference between the day number between months. We also removed the variable "duration" because this variable is only known after the call was made. It does not help in predicting whether a call will be successful or not.
+```
+
+```{r}
+## import data
+setwd("/Users/RahilPatel/Desktop/TO 414")
+bank <- read.csv("bank.csv", sep = ";")
+
+## clean the data
+bank$day <- NULL
+bank$duration <- NULL
+
+bank$y<-as.factor(bank$y)
+bank$y<-ifelse(bank$y=="no",0,1)
+
+# create data set used for analysis
+all_yes <- filter(bank, y == 1)
+yes_newdf <- all_yes[1:521, ]
+
+all_no <- filter(bank, y == 0)
+no_newdf <- all_no[1:1042, ]
+
+new_bank <- rbind(yes_newdf, no_newdf)
+View(new_bank)
+
+# convert necessary variables to dummy variables
+new_bank_dummy <- as.data.frame(model.matrix(~.-1,new_bank))
+
+# shuffle rows and create test and train data sets
+set.seed(12345)
+bank_rand <- new_bank_dummy[sample(nrow(new_bank_dummy)),]
+
+bank_train <- bank_rand[1:1250, ]
+bank_test <- bank_rand[1251:1563, ]
+
+data_labels_train <- bank_train[, "y"]
+data_labels_test <- bank_test[, "y"]
+
+# remove the response variable for testing data
+bank_test$yyes <- NULL
+
+```
+
+## Data Visualizations
+
+```{}
+Before predicting whether a client would lock their money up for an extended period, it is important to gain an understanding of the type of data that we are working with. We decided that it would be helpful to create some graphic visualizations of the data and see if there are any trends that are worth noting. 
+```
+
+```{}
+To get an understanding of the demographics we are working with, we decided to breakdown occupations by age. This data seems pretty in line with a dataset that represents a large segment of the overall population. Intuitively, people with higher paying jobs would have more free cash flow to give to a bank. However, term deposits are not necessarily good investments, given their low guaranteed rate of return. Therefore, it is unclear yet whether the type of job would be a significant factor in determining the likelihood of subscribing to the term deposit.
+```
+
+```{r}
+ggplot(data = new_bank, aes(x = job, y = age)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Job") + 
+  ylab("Age")+ 
+  ggtitle("Employment Status by Age") + 
+  theme_stata() + 
+  theme(axis.text.x = element_text(size=6, face = "bold"))
+```
+
+```{}
+The boxplots below looks at outstanding loan balance by marital status and education. These results are pretty in line with typical trends that we tend to see in America. Married couples have higher outstanding loan balance since they have a larger household. People with higher degress tend to have higher balance since higher education is generally more expensive.
+```
+
+```{r}
+ggplot(data = new_bank, aes(x = marital, y = balance)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Marital Status") + 
+  ylab("Outstanding Balance")+ 
+  ggtitle("Outstanding Balance By Marital Status") + 
+  theme_stata()
+```
+
+```{r}
+ggplot(data = new_bank, aes(x = education, y = balance)) + geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) + xlab("Education") + 
+  ylab("Outstanding Balance")+ 
+  ggtitle("Outstanding Balance By Education") + 
+  theme_stata()
+```
+
+
+
+# Logistic Model
+
+```{r, cache=TRUE}
+#Logistic Model with all predictors
+logistic1 <- glm(y ~ . , data = bank_train, family = "binomial")
+summary(logistic1)
+
+# Predicting test data for logistic model with all predictors
+logit.model.pred <- predict(logistic1, newdata = bank_test, type = "response")
+logit.model.pred1 <- ifelse(logit.model.pred >= .5, 1, 0)
+
+CrossTable(x = data_labels_test, y = logit.model.pred1, 
+           prop.chisq=FALSE)
+confusionMatrix(as.factor(logit.model.pred1), as.factor(data_labels_test), positive = "1")
+```
+
+```{}
+The first predictive model that we ran was a logistic model. We first created a logistic model on the train data with all of the predictor variables. As we can see, the accuracy is 74% with a kappa value of 0.34. Since these values have the potential to be larger, we will look to improve our logistic model in the next step by only including predictor variables with significance values higher than 0.25.
+```
+
+```{r, cache=TRUE}
+# Logistic Model with predictors that have above 75% statistical significance
+logistic2 <- glm(y ~ maritalmarried + educationunknown + housingyes + loanyes + contactunknown + monthdec + monthjan + monthjul + monthmar + monthnov + monthoct + campaign + poutcomeother + poutcomesuccess, data = bank_train, family = "binomial")
+summary(logistic2)
+
+
+# Predicting test data for logistic model with predictors that have above 75% statistical significance
+Second_logit.model.pred <- predict(logistic2, newdata = bank_test, type = "response")
+Second_logit.model.pred1 <- ifelse(logit.model.pred >= .5, 1, 0)
+
+CrossTable(x = data_labels_test, y = Second_logit.model.pred1, 
+           prop.chisq=FALSE)
+
+confusionMatrix(as.factor(Second_logit.model.pred1), as.factor(data_labels_test), positive = "1")
+```
+
+```{}
+After only including predictors in this new model that have a greater than 75% statistical significance, our results have not changed. Our model is still 74% accurate with a kappa value of 0.34. In this case, removing variables that had significance values higher than 0.25 did not make a difference. Typically in statistics, 0.25 is still too high of a threshhold. We will make a third model that only includes variables that have above 95% statistical significance. 
+```
+
+```{r, cache=TRUE}
+# Logistic Model with Predictors that have above 95% statistical significance
+logistic3 <- glm(y ~ maritalmarried + housingyes + loanyes + contactunknown + monthjul + monthmar + monthnov + monthoct + campaign + poutcomesuccess, data = bank_train, family = "binomial")
+summary(logistic3)
+
+
+# Predicting test data for logistic model with predictors that have above 95% statistical significance
+Third_logit.model.pred <- predict(logistic3, newdata = bank_test, type = "response")
+Third_logit.model.pred1 <- ifelse(logit.model.pred >= .5, 1, 0)
+
+CrossTable(x = data_labels_test, y = Third_logit.model.pred1, 
+           prop.chisq=FALSE)
+
+confusionMatrix(as.factor(Third_logit.model.pred1), as.factor(data_labels_test), positive = "1")
+```
+
+
+```{}
+Even after only including variables that are above the 95% statistical significance level, our model yields the same exact results with an accuracy of 74% and a kappa of 0.34. One possible reason for this is that our data set is too small since there are only 1563 entries in the data set. Our logistic model might be better if there was more data to learn from. Another explanation could be that a logistic model might not be the best model to analyze and predict our data for this particular case. As such, we will create other machine learning models in order to try to improve our prediction results.
+
+With the logistic model overall, we can see that there are several significant predictors of subscription. The variables that are significant make sense intuitively. However, we did find it surprising that some of the variables were not significant. Specifically, we were surprised that default is not a significant predictor. When somebody is in default, one would think that they do not have the income to contribute to a term deposit program. The same goes for outstanding balance. We will examine in further models if this is consistent with what the logistic model found. 
+```
+
+
+# Decision Tree
+
+```{r, cache=TRUE}
+bank_train_DT <- bank_train
+bank_train_DT$y <- as.factor(bank_train_DT$y)
+
+bank_DT_model <- C5.0(y ~ ., data = bank_train_DT)
+predict_DT <- predict(bank_DT_model, bank_test)
+
+CrossTable(x = data_labels_test, y = predict_DT, prop.chisq = F)
+confusionMatrix(as.factor(predict_DT), as.factor(data_labels_test), positive = "1")
+
+```
+
+```{}
+The next machine learning model used on this data set was a decision tree. In the first run of this decision tree, we just created a simple model as a starting point before trying to improve our model. This model yielded slightly lower results to the logisitc model as it had an accuracy of 70% and a kappa value of 0.28. In the next step, we will look to further improve this simple decision tree by increasing the number of trials.
+```
+
+```{r, cache=TRUE}
+
+bank_DT_model2 <- C5.0(y ~ ., data = bank_train_DT, trials = 8)
+predict_DT2 <- predict(bank_DT_model2, bank_test)
+
+CrossTable(x = data_labels_test, y = predict_DT2, prop.chisq = F)
+confusionMatrix(as.factor(predict_DT2), as.factor(data_labels_test), positive = "1")
+
+```
+
+```{}
+In this refined version of the decision tree model, we notice that the increase in trials worked in improving our model. We tried a few different values for the number of trials and have concluded that 8 is optimal because it yields the greatest accuracy and kappa values, which are 72% and 0.30, respectively. Even with this slight improvment, our logistic model still yields slightly better results. We will create more machine learning models to see if we can further improve these metrics. 
+```
+
+# ANN
+```{r, cache=TRUE}
+
+normalize <- function(x) { 
+  return((x - min(x)) / (max(x) - min(x)))
+}
+
+bank_norm_ann <- as.data.frame(lapply(bank_rand, normalize))
+
+bank_train_ann <- bank_norm_ann[1:1250, ]
+bank_test_ann <- bank_norm_ann[1251:1563, ]
+
+bank_ANN_model <- neuralnet(formula = y ~ ., data = bank_train_ann)
+
+ann_model_results <- neuralnet::compute(bank_ANN_model, bank_test_ann)
+predicted_bank_ann <- ann_model_results$net.result
+ANN_pred <- ifelse(predicted_bank_ann >= 0.5,1,0)
+
+ANN_pred_new <- as.data.frame(ANN_pred)$V1
+
+CrossTable(x = data_labels_test, y = ANN_pred, prop.chisq = F)
+confusionMatrix(as.factor(ANN_pred), as.factor(data_labels_test), positive = "1")
+
+```
+
+```{}
+The next type of model that we created was an artificial neural network (ANN). After running the ANN Model and using the model to predict the testing data, we are left average results. The accuracy level for this model is 72% and the kappa value is 0.32, which are similar to our previous logisitc and decision tree model results. In order to try and improve the results, we will add in hidden nodes to the ANN model we just created.
+```
+
+
+```{r, cache=TRUE}
+bank_ANN_model2 <- neuralnet(formula = y ~ ., data = bank_train_ann, hidden = 3)
+ann_model_results2 <- neuralnet::compute(bank_ANN_model2, bank_test_ann)
+predicted_bank_ann2 <- ann_model_results2$net.result
+ANN_pred2 <- ifelse(predicted_bank_ann2 >= 0.5,1,0)
+ANN_pred2_new <- as.data.frame(ANN_pred)$V1
+
+CrossTable(x = data_labels_test, y = ANN_pred2, prop.chisq = F)
+confusionMatrix(as.factor(ANN_pred2), as.factor(data_labels_test), positive = "1")
+```
+
+```{}
+After adding in the hidden nodes in order to improve our model, our results improved, but only slightly. Our accuracy stayed the same at 72%, but our kappa value increased from 0.32 to 0.35. Even though this is only a slight improvment, any improvement in our model is good. If we are using an ANN model to predict test points, we should be using this new and improved model over the original version.
+```
+
+
+# SVM
+
+```{r, cache=TRUE}
+
+SVM_Model <- ksvm(y ~ ., data = bank_train, kernel = "vanilladot")
+
+SVM_predict <- predict(SVM_Model, bank_test)
+SVM_predict <- ifelse(SVM_predict> 0.5, 1, 0)
+
+CrossTable(x = data_labels_test, y = SVM_predict, prop.chisq = F)
+
+confusionMatrix(as.factor(SVM_predict), as.factor(data_labels_test), positive = "1")
+
+```
+
+```{}
+The next type of model that we created was a simple Support Vector Machine (SVM) with the kernel "vanilladot". After running this data, our results are 72% accuracy and a kappa of 0.27. We will look to improve these numbers in the next step by using different kernels.
+```
+
+
+```{r, cache=TRUE}
+
+SVM_Model2 <- ksvm(y ~ ., data = bank_train, kernel = "rbfdot")
+
+SVM_predict2 <- predict(SVM_Model2, bank_test)
+SVM_predict2 <- ifelse(SVM_predict2> 0.5, 1, 0)
+
+CrossTable(x = data_labels_test, y = SVM_predict2, prop.chisq = F)
+
+confusionMatrix(as.factor(SVM_predict2), as.factor(data_labels_test), positive = "1")
+
+```
+
+```{}
+After experimenting with different kernels, we found the "rbfdot" kernel to be the best one as it yields us 73% accuracy and a kappa value of 0.31. We will use this version of the SVM model when creating the stacked model, which will be explained in later steps.
+```
+
+
+# KNN
+
+```{r, cache=TRUE}
+
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+bank_random_knn <- as.data.frame(lapply(bank_rand[1:ncol(bank_rand)], normalize))
+
+sqrt(nrow(bank_test))
+
+KNN_test_pred <- knn(train = bank_train, test = bank_test, cl = data_labels_train, k=18)
+
+CrossTable(x = data_labels_test, y = KNN_test_pred, 
+           prop.chisq=FALSE)
+
+confusionMatrix(as.factor(KNN_test_pred), as.factor(data_labels_test), positive = "1")
+
+```
+
+```{}
+The last model that we analyzed was the k-nearest neigbors (KNN) model. In order to find K for this model, we had to take the square root of the number of rows in our data set. Using this value (18) as our k, we ran the model and came across some dissapointing predictions. Our accuracy was extremely low as it was only 66%, and our kappa was just 0.10. This was by far our worst model performance. One of the reasons for this possibility is that the data set is skewed towards being mostly unsuccessful telemarketing calls. This means that most of the "neighbors" in our data set would be listed as unsuccessful making it hard for this column to predict the outcome of a new data point with given inputs.
+```
+
+
+
+# Stacked Model
+
+```{}
+After creating 5 individual models to predict whether a telemarketing call for this Portuguese Bank will be successful or not, it is time to create a combined or stacked model that pulls from each of these models to create a model with an even higher accuracy and kappa rate. The inputs for this stacked model will be the test results from the logistic model, decision tree, ANN model, and SVM model. We will not include the KNN results since this model produced extremely low accuracy and kappa values.
+
+The first attempt at building this model we will employ a simple voting scheme meaning the stacked model will predict an output based on what the majority of the inputs predict. Since we now only have 4 inputs (exclusion of KNN results), we have a decision to make. We have decided that if there is a tie in the vote (2-2), we will have the stacked model predict that the prospective client will be a successful call. This is because the data is skewed in favor of unsuccessful calls, so if there is a decent chance that a prospective client will subscribe to the term deposit, we want to make sure the bank pursues the oppurtunity.
+```
+
+
+```{r}
+# Convert inputs to correct class for building stacked model
+data_labels_test <- (as.factor(data_labels_test))
+
+SVM_predict2 <- (as.character(SVM_predict2))
+SVM_predict2 <- (as.numeric(SVM_predict2))
+
+predict_DT2 <- (as.character(predict_DT2))
+predict_DT2 <- (as.numeric(predict_DT2))
+
+#Predict Using Voting Scheme
+pred_vote <- ifelse(((Third_logit.model.pred1) + (predict_DT2) + (ANN_pred2_new) + (SVM_predict2) ) > 1.5, 1, 0)
+
+CrossTable(x = data_labels_test, y = pred_vote, prop.chisq = F)
+
+confusionMatrix(as.factor(pred_vote), as.factor(data_labels_test), positive = "1")
+```
+
+
+```{}
+After running the simple voting scheme, we are left with the results of 74% accuracy and a 0.34 kappa value. This is not the best results we were hoping for because it is not a significant improvment over the individual models. For example, the logisitic model had the same exact accuracy percentage and kappa value. 
+
+We will look to build a better stacked model with an increased accuracy percentage and kappa value. To do this, we will build a new decision tree with inputs from the logistic, decision tree, ANN, and SVM testing predictions. We will then create new train and test sets for this tree.
+
+```
+
+
+
+```{r}
+# Create new data frame for decision tree stacked model
+pred_df <- data.frame(data_labels_test, Third_logit.model.pred1, predict_DT2, ANN_pred2_new, SVM_predict2)
+
+set.seed(12345)
+pred_df_random <- pred_df[sample(nrow(pred_df)), ]
+
+pred_newdf_train <- pred_df_random[1:200, ]
+pred_newdf_test <- pred_df_random[201:313, ]
+
+View(pred_newdf_test)
+
+test_labels <- pred_newdf_test$data_labels_test
+pred_newdf_test$data_labels_test <- NULL
+
+# Run the new decision tree model and predict the test data
+new_bank_DT_model <- C5.0(data_labels_test ~., data = pred_newdf_train)
+new_predict_DT <- predict(new_bank_DT_model, pred_newdf_test)
+
+CrossTable(x = test_labels, y = new_predict_DT, prop.chisq = F)
+
+confusionMatrix(as.factor(new_predict_DT), as.factor(test_labels), positive = "1")
+```
+
+
+```{}
+After running this new stacked model using a decision tree, we are left with our best results yet. Our accuracy is up to 78% and our kappa is up to 0.36. Both of these values are greater than any of the values found in the individual models. Thus, our stacked model was successful in that it optimizes all of the individual models to create the best single model.
+```
+
+# Conclusion
+
+```{}
+As can be seen from the metrics above, our stacked model has a kappa value of 0.36 and an accuracy of 78%. Since a kappa statistic between 0.2 to 0.4 is generally interpreted as a fair agreement, the models in predicting whether clients will subscribe to the term deposit did not work as effectively as anticipated, mostly due to the lack of highly predictive input variables, and it would be fairly difficult to make substantial improvement through solely adjusting the algorithms.
+
+Under this specific business case, inaccuracies in prediction have the following implications:
+
+False Positive: we think the client will subscribe -> reach out and sell the product -> client declines
+False Negative: we think the client will not subscribe -> skip this client -> potential sales lost
+
+In this business situation, we believe that false positives are the more important type of error to analyze. This is because the goal of this project is to increase the success rate of the telemarketing campaign. If we reduce the false positive rate, the success rate will increase because a higher percentage of the clients we call will subscribe to the term deposit. In our stacked model, the false positive rate was only 4% (3/80), which is pretty good. As a result, our rate of success was fairly high at 79% (11/14). This means that our model predicted 14 future clients, 11 of which actually turned out to subscribe. In context of the initial data set, where only 11% of all data points were successful calls, this is a good metric for our model. Of course, it is important to keep in mind that the bank will miss out on some customers because it never contacted them, so there is definitely a balance. 
+
+If the client were to revisit this project in the future, we have one additional suggestion that the client might want to look into. We believe that in the real business setting, we don't necessarily need to give each client a binary label, that is, we can leave it at the probability of subscribing to the term deposit, and target each customer differently based on that. For example, we may be more interested in reaching out (making a phone call, sending out promotional emails, etc.) to clients with around a 50% chance compared to those with 20% chance, since it is much easier to improve those "50-50" clients to a high probability. Also, we might not even need to make a heavy effort calling those "95%" clients, and we could use other less costly and more efficient approaches rather than making a phone call, since those people almost certainly will subscribe as long as they are aware of this product. Having said this, there is still flexibility and room for improvements with this business scenario if the client were interested in modifying this analysis in the future.
+
+All in all, using the stacked model we created will allow the bank to save time and money by not wasting so much of their resources contacting people who are unlikely to subscribe to the term deposit. The bank should be comfortable and confident in using this stacked model to increase success rate in their telemarketing campaign of term deposits. Furthermore, the bank should continue to add data entries to the training data set as time goes on so that the machine learning model can continuously "learn" and improve the accuracy of its predictions.
+
+```
+
